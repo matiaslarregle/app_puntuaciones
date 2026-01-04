@@ -8,7 +8,7 @@ from datetime import date
 st.set_page_config(page_title="Fútbol amigos", layout="wide")
 st.title("⚽ Puntuaciones fútbol")
 
-# ---------------- AUTH (STREAMLIT SECRETS) ----------------
+# ---------------- AUTH ----------------
 scope = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -37,16 +37,13 @@ match_players = pd.DataFrame(mp_ws.get_all_records())
 ratings = pd.DataFrame(ratings_ws.get_all_records())
 votes_log = pd.DataFrame(votes_ws.get_all_records())
 
-# ---------------- ADMIN: CARGAR PARTIDO ----------------
+# ---------------- ADMIN ----------------
 with st.expander("🛠️ Cargar partido (Mati)"):
     fecha = st.date_input("Fecha", date.today())
-    resultado = st.selectbox(
-        "Resultado",
-        ["Victoria A", "Empate", "Victoria B"]
-    )
+    resultado = st.selectbox("Resultado", ["Victoria A", "Empate", "Victoria B"])
 
-    team_a = st.multiselect("Equipo A", players["name"].tolist())
-    team_b = st.multiselect("Equipo B", players["name"].tolist())
+    team_a = st.multiselect("Equipo A", players["name"])
+    team_b = st.multiselect("Equipo B", players["name"])
 
     if st.button("Guardar partido"):
         if set(team_a) & set(team_b):
@@ -63,102 +60,36 @@ with st.expander("🛠️ Cargar partido (Mati)"):
                 pid = players.loc[players["name"] == p, "player_id"].values[0]
                 mp_ws.append_row([match_id, pid, "B"])
 
-            st.success("Partido cargado correctamente")
+            st.success("Partido cargado")
 
-# ---------------- VOTAR PARTIDO ----------------
+# ---------------- VOTAR ----------------
 st.header("📝 Votar partido")
 
-if matches.empty:
-    st.info("Todavía no hay partidos cargados")
+match_id = st.selectbox("Partido", matches["match_id"])
+voter_name = st.selectbox("Quién sos", players["name"])
+voter_id = players.loc[players["name"] == voter_name, "player_id"].values[0]
+
+if not votes_log.empty and (
+    (votes_log["match_id"] == match_id) &
+    (votes_log["voter_id"] == voter_id)
+).any():
+    st.warning("Ya votaste este partido")
 else:
-    match_id = st.selectbox("Partido", matches["match_id"].tolist())
-    voter_name = st.selectbox("Quién sos", players["name"].tolist())
-    voter_id = players.loc[players["name"] == voter_name, "player_id"].values[0]
-
-    ya_voto = (
-        (votes_log["match_id"] == match_id)
-        & (votes_log["voter_id"] == voter_id)
-    ).any()
-
-    if ya_voto:
-        st.warning("Ya votaste este partido")
-    else:
-        jugadores = (
-            match_players[match_players["match_id"] == match_id]
-            .merge(players, on="player_id")
-        )
-
-        votos = {}
-        for _, row in jugadores.iterrows():
-            if row["player_id"] != voter_id:
-                votos[row["player_id"]] = st.slider(
-                    row["name"], 1.0, 10.0, 6.0, 0.5
-                )
-
-        if st.button("Enviar votos"):
-            for pid, nota in votos.items():
-                ratings_ws.append_row([match_id, pid, nota])
-
-            # log para evitar doble voto (NO expone quién votó a quién)
-            votes_ws.append_row([match_id, voter_id])
-
-            st.success("Voto registrado (anónimo)")
-
-# ---------------- TABLA ANUAL ----------------
-st.header("📊 Tabla anual")
-
-if ratings.empty:
-    st.info("Todavía no hay votos cargados")
-else:
-    ratings.columns = ["match_id", "rated_player", "score"]
-
-    stats = (
-        ratings
-        .groupby("rated_player", as_index=False)
-        .agg(
-            avg_score=("score", "mean"),
-            matches_played=("match_id", "nunique"),
-        )
+    jugadores = (
+        match_players[match_players["match_id"] == match_id]
+        .merge(players, on="player_id")
     )
 
-    stats["avg_score"] = stats["avg_score"].round(1)
-    stats = stats.merge(
-        players, left_on="rated_player", right_on="player_id"
-    )
+    votos = {}
+    for _, row in jugadores.iterrows():
+        if row["player_id"] != voter_id:
+            votos[row["player_id"]] = st.slider(
+                row["name"], 1.0, 10.0, 6.0, 0.5
+            )
 
-    mp = match_players.merge(matches, on="match_id")
+    if st.button("Enviar votos"):
+        for pid, nota in votos.items():
+            ratings_ws.append_row([match_id, pid, nota])
 
-    def outcome(row):
-        if row["result"] == "Empate":
-            return "E"
-        if row["result"] == "Victoria A" and row["team"] == "A":
-            return "G"
-        if row["result"] == "Victoria B" and row["team"] == "B":
-            return "G"
-        return "P"
-
-    mp["outcome"] = mp.apply(outcome, axis=1)
-
-    res = (
-        mp.groupby(["player_id", "outcome"])
-        .size()
-        .unstack(fill_value=0)
-        .reset_index()
-    )
-
-    final = stats.merge(res, left_on="rated_player", right_on="player_id")
-    final["PJ"] = final.get("G", 0) + final.get("E", 0) + final.get("P", 0)
-    final["Winrate"] = (final.get("G", 0) / final["PJ"] * 100).round(1)
-
-    st.dataframe(
-        final[
-            ["name", "avg_score", "PJ", "G", "E", "P", "Winrate"]
-        ]
-        .rename(columns={
-            "name": "Jugador",
-            "avg_score": "Puntaje promedio"
-        })
-        .sort_values("Puntaje promedio", ascending=False),
-        use_container_width=True
-    )
-
+        votes_ws.append_row([match_id, voter_id])
+        st.success("Voto registrado (anónimo)")
