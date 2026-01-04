@@ -1,22 +1,24 @@
 import streamlit as st
 import pandas as pd
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 from datetime import date
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="Fútbol amigos", layout="wide")
 st.title("⚽ Puntuaciones fútbol")
 
-# ---------------- AUTH (SECRETS) ----------------
+# ---------------- AUTH (STREAMLIT SECRETS) ----------------
 scope = [
-    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
 
-creds = ServiceAccountCredentials.from_json_keyfile_dict(
-    st.secrets["gcp_service_account"], scope
+creds = Credentials.from_service_account_info(
+    st.secrets["gcp_service_account"],
+    scopes=scope,
 )
+
 client = gspread.authorize(creds)
 
 SHEET_NAME = "futbol_amigos_db"
@@ -61,48 +63,55 @@ with st.expander("🛠️ Cargar partido (Mati)"):
                 pid = players.loc[players["name"] == p, "player_id"].values[0]
                 mp_ws.append_row([match_id, pid, "B"])
 
-            st.success("Partido cargado")
+            st.success("Partido cargado correctamente")
 
 # ---------------- VOTAR PARTIDO ----------------
 st.header("📝 Votar partido")
 
-match_id = st.selectbox("Partido", matches["match_id"].tolist())
-voter_name = st.selectbox("Quién sos", players["name"].tolist())
-voter_id = players.loc[players["name"] == voter_name, "player_id"].values[0]
-
-ya_voto = (
-    (votes_log["match_id"] == match_id)
-    & (votes_log["voter_id"] == voter_id)
-).any()
-
-if ya_voto:
-    st.warning("Ya votaste este partido")
+if matches.empty:
+    st.info("Todavía no hay partidos cargados")
 else:
-    jugadores = (
-        match_players[match_players["match_id"] == match_id]
-        .merge(players, on="player_id")
-    )
+    match_id = st.selectbox("Partido", matches["match_id"].tolist())
+    voter_name = st.selectbox("Quién sos", players["name"].tolist())
+    voter_id = players.loc[players["name"] == voter_name, "player_id"].values[0]
 
-    votos = {}
-    for _, row in jugadores.iterrows():
-        if row["player_id"] != voter_id:
-            votos[row["player_id"]] = st.slider(
-                row["name"], 1.0, 10.0, 6.0, 0.5
-            )
+    ya_voto = (
+        (votes_log["match_id"] == match_id)
+        & (votes_log["voter_id"] == voter_id)
+    ).any()
 
-    if st.button("Enviar votos"):
-        for pid, nota in votos.items():
-            ratings_ws.append_row([match_id, pid, nota])
+    if ya_voto:
+        st.warning("Ya votaste este partido")
+    else:
+        jugadores = (
+            match_players[match_players["match_id"] == match_id]
+            .merge(players, on="player_id")
+        )
 
-        # LOG DEL VOTO (anonimato garantizado)
-        votes_ws.append_row([match_id, voter_id])
+        votos = {}
+        for _, row in jugadores.iterrows():
+            if row["player_id"] != voter_id:
+                votos[row["player_id"]] = st.slider(
+                    row["name"], 1.0, 10.0, 6.0, 0.5
+                )
 
-        st.success("Voto registrado (anónimo)")
+        if st.button("Enviar votos"):
+            for pid, nota in votos.items():
+                ratings_ws.append_row([match_id, pid, nota])
+
+            # log para evitar doble voto (NO expone quién votó a quién)
+            votes_ws.append_row([match_id, voter_id])
+
+            st.success("Voto registrado (anónimo)")
 
 # ---------------- TABLA ANUAL ----------------
 st.header("📊 Tabla anual")
 
-if not ratings.empty:
+if ratings.empty:
+    st.info("Todavía no hay votos cargados")
+else:
+    ratings.columns = ["match_id", "rated_player", "score"]
+
     stats = (
         ratings
         .groupby("rated_player", as_index=False)
@@ -152,3 +161,4 @@ if not ratings.empty:
         .sort_values("Puntaje promedio", ascending=False),
         use_container_width=True
     )
+
