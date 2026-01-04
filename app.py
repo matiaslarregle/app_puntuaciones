@@ -25,6 +25,12 @@ client = gspread.authorize(creds)
 SHEET_ID = "1rxldVieuVsM6WBskIo9SjynoSRTS-1vjiyuxX7TkKX0"
 sheet = client.open_by_key(SHEET_ID)
 
+# 🔍 DEBUG: ver nombres reales de las hojas
+st.write("Hojas disponibles:")
+for ws in sheet.worksheets():
+    st.write(ws.title)
+
+
 # ---------------- LOAD SHEETS ----------------
 players_ws = sheet.worksheet("players")
 matches_ws = sheet.worksheet("matches")
