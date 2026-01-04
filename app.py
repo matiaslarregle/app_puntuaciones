@@ -64,22 +64,17 @@ if section == "Cargar partido":
             players.loc[len(players)] = {"player": new_player}
             save_csv(players, "players")
 
-    selected_players = st.multiselect(
-        "Quiénes jugaron",
-        players["player"].tolist()
-    )
-
     st.subheader("Equipo A")
     team_a = st.multiselect(
         "Jugadores Equipo A",
-        selected_players,
+        players["player"].tolist(),
         key="team_a"
     )
 
     st.subheader("Equipo B")
     team_b = st.multiselect(
         "Jugadores Equipo B",
-        selected_players,
+        players["player"].tolist(),
         key="team_b"
     )
 
@@ -209,10 +204,7 @@ if section == "Tabla anual":
     avg_scores = (
         ratings
         .groupby("rated_player", as_index=False)
-        .agg(
-            avg_score=("score", "mean"),
-            matches_played=("match_id", "count")
-        )
+        .agg(avg_score=("score", "mean"))
     )
 
     merged = match_players.merge(matches, on="match_id")
