@@ -1,252 +1,123 @@
 import streamlit as st
 import pandas as pd
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from datetime import date
-import os
 
-st.set_page_config(page_title="Fútbol Amigos", layout="centered")
+# ---------------- AUTH ----------------
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
 
-DATA_DIR = "data"
-os.makedirs(DATA_DIR, exist_ok=True)
-
-# ------------------------
-# Utils
-# ------------------------
-
-def load_csv(name, columns):
-    path = f"{DATA_DIR}/{name}.csv"
-    if os.path.exists(path):
-        return pd.read_csv(path)
-    df = pd.DataFrame(columns=columns)
-    df.to_csv(path, index=False)
-    return df
-
-def save_csv(df, name):
-    df.to_csv(f"{DATA_DIR}/{name}.csv", index=False)
-
-# ------------------------
-# Data
-# ------------------------
-
-players = load_csv("players", ["player"])
-matches = load_csv("matches", ["match_id", "date", "result"])
-match_players = load_csv("match_players", ["match_id", "player", "team"])
-votes_log = load_csv("votes_log", ["match_id", "player"])
-ratings = load_csv("ratings", ["match_id", "rated_player", "score"])
-
-# ------------------------
-# Sidebar
-# ------------------------
-
-section = st.sidebar.radio(
-    "Menú",
-    ["Cargar partido", "Votar partido", "Resultado partido", "Tabla anual"]
+creds = ServiceAccountCredentials.from_json_keyfile_name(
+    "service_account.json", scope
 )
+client = gspread.authorize(creds)
 
-# ------------------------
-# Cargar partido
-# ------------------------
+SHEET_NAME = "futbol_amigos_db"
+sheet = client.open(SHEET_NAME)
 
-if section == "Cargar partido":
-    st.title("Cargar partido")
+players_ws = sheet.worksheet("players")
+matches_ws = sheet.worksheet("matches")
+mp_ws = sheet.worksheet("match_players")
+ratings_ws = sheet.worksheet("ratings")
+votes_ws = sheet.worksheet("votes_log")
 
-    match_date = st.date_input("Fecha", date.today())
+players = pd.DataFrame(players_ws.get_all_records())
+matches = pd.DataFrame(matches_ws.get_all_records())
+match_players = pd.DataFrame(mp_ws.get_all_records())
+ratings = pd.DataFrame(ratings_ws.get_all_records())
+votes_log = pd.DataFrame(votes_ws.get_all_records())
 
-    result = st.selectbox(
-        "Resultado",
-        ["Victoria Equipo A", "Empate", "Victoria Equipo B"]
-    )
+st.set_page_config(page_title="Fútbol amigos", layout="wide")
+st.title("⚽ Puntuaciones fútbol")
 
-    st.subheader("Jugadores")
+# ---------------- ADMIN ----------------
+with st.expander("🛠️ Cargar partido (Mati)"):
+    fecha = st.date_input("Fecha", date.today())
+    resultado = st.selectbox("Resultado", ["A", "B", "Draw"])
 
-    new_player = st.text_input("Agregar jugador")
-    if st.button("Agregar jugador") and new_player:
-        if new_player not in players["player"].values:
-            players.loc[len(players)] = {"player": new_player}
-            save_csv(players, "players")
-
-    st.subheader("Equipo A")
-    team_a = st.multiselect(
-        "Jugadores Equipo A",
-        players["player"].tolist(),
-        key="team_a"
-    )
-
-    st.subheader("Equipo B")
-    team_b = st.multiselect(
-        "Jugadores Equipo B",
-        players["player"].tolist(),
-        key="team_b"
-    )
+    team_a = st.multiselect("Equipo A", players["name"])
+    team_b = st.multiselect("Equipo B", players["name"])
 
     if st.button("Guardar partido"):
-
-        if not team_a or not team_b:
-            st.error("Ambos equipos deben tener al menos un jugador")
-            st.stop()
-
-        if set(team_a) & set(team_b):
-            st.error("Un jugador no puede estar en ambos equipos")
-            st.stop()
-
-        match_id = matches["match_id"].max() + 1 if not matches.empty else 1
-
-        matches.loc[len(matches)] = {
-            "match_id": match_id,
-            "date": match_date,
-            "result": result
-        }
-        save_csv(matches, "matches")
+        match_id = len(matches) + 1
+        matches_ws.append_row([match_id, str(fecha), resultado])
 
         for p in team_a:
-            match_players.loc[len(match_players)] = {
-                "match_id": match_id,
-                "player": p,
-                "team": "A"
-            }
+            pid = players.loc[players["name"] == p, "player_id"].values[0]
+            mp_ws.append_row([match_id, pid, "A"])
 
         for p in team_b:
-            match_players.loc[len(match_players)] = {
-                "match_id": match_id,
-                "player": p,
-                "team": "B"
-            }
+            pid = players.loc[players["name"] == p, "player_id"].values[0]
+            mp_ws.append_row([match_id, pid, "B"])
 
-        save_csv(match_players, "match_players")
         st.success("Partido cargado")
 
-# ------------------------
-# Votar partido
-# ------------------------
+# ---------------- VOTAR ----------------
+st.header("📝 Votar partido")
 
-if section == "Votar partido":
-    st.title("Votar partido")
+voter = st.selectbox("Quién sos", players["name"])
+match_id = st.selectbox("Partido", matches["match_id"])
 
-    if matches.empty:
-        st.info("No hay partidos cargados")
-        st.stop()
+ya_voto = (
+    (votes_log["match_id"] == match_id)
+    & (votes_log["voter"] == voter)
+).any()
 
-    match_id = st.selectbox("Partido", matches["match_id"])
-
-    players_in_match = match_players[
+if ya_voto:
+    st.warning("Ya votaste este partido")
+else:
+    jugadores = match_players[
         match_players["match_id"] == match_id
-    ]["player"].tolist()
+    ].merge(players, on="player_id")
 
-    voter = st.selectbox("¿Quién sos?", players_in_match)
+    for _, row in jugadores.iterrows():
+        nota = st.slider(
+            f"{row['name']}", 1.0, 10.0, 6.0, 0.5
+        )
+        ratings_ws.append_row([match_id, row["player_id"], nota])
 
-    already_voted = (
-        (votes_log["match_id"] == match_id) &
-        (votes_log["player"] == voter)
-    ).any()
+    votes_ws.append_row([match_id, voter])
+    st.success("Voto registrado (anónimo)")
 
-    if already_voted:
-        st.warning("Ya votaste este partido")
-        st.stop()
+# ---------------- TABLA ANUAL ----------------
+st.header("📊 Tabla anual")
 
-    st.subheader("Puntuá a tus compañeros")
+if not ratings.empty:
+    stats = ratings.groupby("rated_player").agg(
+        avg_rating=("rating", "mean"),
+        matches_played=("match_id", "nunique"),
+    ).reset_index()
 
-    scores = {}
-    for p in players_in_match:
-        if p != voter:
-            scores[p] = st.slider(p, 1, 10, 7)
+    stats["avg_rating"] = stats["avg_rating"].round(1)
 
-    if st.button("Enviar votos"):
-        votes_log.loc[len(votes_log)] = {
-            "match_id": match_id,
-            "player": voter
-        }
-        save_csv(votes_log, "votes_log")
-
-        for rated, score in scores.items():
-            ratings.loc[len(ratings)] = {
-                "match_id": match_id,
-                "rated_player": rated,
-                "score": score
-            }
-
-        save_csv(ratings, "ratings")
-        st.success("Voto registrado")
-
-# ------------------------
-# Resultado partido
-# ------------------------
-
-if section == "Resultado partido":
-    st.title("Resultado del partido")
-
-    if ratings.empty:
-        st.info("Todavía no hay votos")
-        st.stop()
-
-    match_id = st.selectbox("Partido", matches["match_id"])
-
-    match_scores = (
-        ratings[ratings["match_id"] == match_id]
-        .groupby("rated_player", as_index=False)
-        .agg(score=("score", "mean"))
+    stats = stats.merge(
+        players, left_on="rated_player", right_on="player_id"
     )
 
-    match_scores["score"] = match_scores["score"].round(1)
-    match_scores = match_scores.sort_values("score", ascending=False)
+    mp = match_players.merge(matches, on="match_id")
 
-    st.dataframe(match_scores, use_container_width=True)
+    def results(df):
+        g = ((df.team == df.result)).sum()
+        e = (df.result == "Draw").sum()
+        p = len(df) - g - e
+        return pd.Series(
+            {"G": g, "E": e, "P": p, "PJ": len(df)}
+        )
 
-# ------------------------
-# Tabla anual
-# ------------------------
+    res = mp.groupby("player_id").apply(results).reset_index()
 
-if section == "Tabla anual":
-    st.title("Tabla anual")
+    final = stats.merge(res, left_on="rated_player", right_on="player_id")
+    final["Winrate"] = (final["G"] / final["PJ"] * 100).round(1)
 
-    if ratings.empty:
-        st.info("Todavía no hay datos")
-        st.stop()
-
-    avg_scores = (
-        ratings
-        .groupby("rated_player", as_index=False)
-        .agg(avg_score=("score", "mean"))
+    st.dataframe(
+        final[
+            ["name", "avg_rating", "PJ", "G", "E", "P", "Winrate"]
+        ].sort_values("avg_rating", ascending=False)
     )
 
-    merged = match_players.merge(matches, on="match_id")
-
-    def outcome(row):
-        if row["result"] == "Empate":
-            return "draw"
-        if row["result"] == "Victoria Equipo A" and row["team"] == "A":
-            return "win"
-        if row["result"] == "Victoria Equipo B" and row["team"] == "B":
-            return "win"
-        return "loss"
-
-    merged["outcome"] = merged.apply(outcome, axis=1)
-
-    results = (
-        merged
-        .groupby(["player", "outcome"])
-        .size()
-        .unstack(fill_value=0)
-        .reset_index()
-    )
-
-    table = avg_scores.merge(results, left_on="rated_player", right_on="player")
-
-    table["winrate"] = (
-        table.get("win", 0) /
-        (table.get("win", 0) + table.get("draw", 0) + table.get("loss", 0))
-    ).round(2)
-
-    table = table.rename(columns={
-        "rated_player": "Jugador",
-        "avg_score": "Puntaje promedio",
-        "win": "Victorias",
-        "draw": "Empates",
-        "loss": "Derrotas",
-        "winrate": "Winrate"
-    })
-
-    table = table[
-        ["Jugador", "Puntaje promedio", "Victorias", "Empates", "Derrotas", "Winrate"]
-    ].sort_values("Puntaje promedio", ascending=False)
 
     table["Puntaje promedio"] = table["Puntaje promedio"].round(1)
 
