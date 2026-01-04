@@ -20,10 +20,8 @@ def load_csv(name, columns):
     df.to_csv(path, index=False)
     return df
 
-
 def save_csv(df, name):
     df.to_csv(f"{DATA_DIR}/{name}.csv", index=False)
-
 
 # ------------------------
 # Data
@@ -71,15 +69,30 @@ if section == "Cargar partido":
         players["player"].tolist()
     )
 
-    teams_assignment = {}
-    for p in selected_players:
-        teams_assignment[p] = st.selectbox(
-            f"Equipo de {p}",
-            ["A", "B"],
-            key=f"{p}_team"
-        )
+    st.subheader("Equipo A")
+    team_a = st.multiselect(
+        "Jugadores Equipo A",
+        selected_players,
+        key="team_a"
+    )
+
+    st.subheader("Equipo B")
+    team_b = st.multiselect(
+        "Jugadores Equipo B",
+        selected_players,
+        key="team_b"
+    )
 
     if st.button("Guardar partido"):
+
+        if not team_a or not team_b:
+            st.error("Ambos equipos deben tener al menos un jugador")
+            st.stop()
+
+        if set(team_a) & set(team_b):
+            st.error("Un jugador no puede estar en ambos equipos")
+            st.stop()
+
         match_id = matches["match_id"].max() + 1 if not matches.empty else 1
 
         matches.loc[len(matches)] = {
@@ -89,11 +102,18 @@ if section == "Cargar partido":
         }
         save_csv(matches, "matches")
 
-        for p in selected_players:
+        for p in team_a:
             match_players.loc[len(match_players)] = {
                 "match_id": match_id,
                 "player": p,
-                "team": teams_assignment[p]
+                "team": "A"
+            }
+
+        for p in team_b:
+            match_players.loc[len(match_players)] = {
+                "match_id": match_id,
+                "player": p,
+                "team": "B"
             }
 
         save_csv(match_players, "match_players")
@@ -126,6 +146,8 @@ if section == "Votar partido":
     if already_voted:
         st.warning("Ya votaste este partido")
         st.stop()
+
+    st.subheader("Puntuá a tus compañeros")
 
     scores = {}
     for p in players_in_match:
@@ -184,7 +206,6 @@ if section == "Tabla anual":
         st.info("Todavía no hay datos")
         st.stop()
 
-    # Puntaje promedio
     avg_scores = (
         ratings
         .groupby("rated_player", as_index=False)
@@ -194,7 +215,6 @@ if section == "Tabla anual":
         )
     )
 
-    # Resultados por jugador
     merged = match_players.merge(matches, on="match_id")
 
     def outcome(row):
@@ -226,7 +246,6 @@ if section == "Tabla anual":
     table = table.rename(columns={
         "rated_player": "Jugador",
         "avg_score": "Puntaje promedio",
-        "matches_played": "Partidos votados",
         "win": "Victorias",
         "draw": "Empates",
         "loss": "Derrotas",
@@ -240,9 +259,3 @@ if section == "Tabla anual":
     table["Puntaje promedio"] = table["Puntaje promedio"].round(1)
 
     st.dataframe(table, use_container_width=True)
-
-
-    global_scores["global_score"] = global_scores["global_score"].round(1)
-    global_scores = global_scores.sort_values("global_score", ascending=False)
-
-    st.dataframe(global_scores, use_container_width=True)
